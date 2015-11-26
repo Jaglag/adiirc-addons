@@ -1,0 +1,32 @@
+alias findwindow {
+  var %search $1
+  if (!%search) {
+    %search = $$?="Search for" 
+  }
+
+  %search = $+(*,%search,*)
+
+  window -l @findwindow
+  var %s 0
+  while (%s < $scon(0)) {
+    inc %s
+    scon %s
+    var %w 0
+
+    while (%w < $window(%search, 0)) {
+      inc %w
+      aline @findwindow %s $network $window(%search, %w)
+    }
+  }
+}
+
+menu @findwindow {
+  dclick:{
+    scon $gettok($line(@findwindow,$1),1,32) window -a $gettok($line(@findwindow,$1),3,32)
+    window -c @findwindow
+  }
+}
+
+menu channel,status,query,menubar {
+  Find Window:findwindow
+}

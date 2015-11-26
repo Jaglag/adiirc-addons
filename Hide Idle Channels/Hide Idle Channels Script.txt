@@ -1,0 +1,39 @@
+; http://dev.adiirc.com/boards/5/topics/475
+; v0.1.2 by pereba
+
+; Hide all idle channels and querys (no new message color):
+;  /hidle
+
+; Force unhidden all windows if need:
+;  /hidle un
+
+; Lets hide inactive windows after xx seconds on AdiIRC startup?!
+;on *:Start: .timer 1 60 scon -a hidle
+
+; Restore windows on unloading script
+on *:Unload: hidle un
+
+alias hidle scon -a dohidle $iif($istok(channel query,$window($active).type,32) && !$1,$wid,$1)
+
+alias -l dohidle {
+  var %w $window(*,0)
+  while (%w) {
+    var %type $istok(channel query,$window(*,%w).type,32)
+    if ($1 == un && %type) window -w3 $window(*,%w)
+    elseif (!$istok(message highlight,$window(*,%w).sbcolor,32)) && ($1 != $window(*,%w).wid && %type) window -w0 $window(*,%w)
+    dec %w
+  }
+}
+
+; Unhidden on activity
+on *:Text:*:#,?: {
+  var %w $iif(#,#,$nick)
+  if (!$window(%w).tbstate) window -w3 %w
+}
+
+menu channel {
+  -
+  Idle Windows
+  .Hide no new message windows: hidle
+  .Force unhidden all: hidle un
+}
