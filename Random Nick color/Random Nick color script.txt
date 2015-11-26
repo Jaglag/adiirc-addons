@@ -1,0 +1,299 @@
+; Hackjob full-palette Random Nick Color script for AdiIRC
+; Generate consistent but random, full-palette colors for nicks & set custom colors as you please
+;
+; Version 1.2
+;
+;
+; *Now allows storage of custom colors!
+;		Usage: /setCustomColor <Nick> <Hex Color Code> - Example: /setCustomColor JohnDoe F854A7
+;				/delCustomColor <Nick> - Example: /delCustomColor JohnDoe
+;
+; *Colors are now calculated once and stored as needed for both random and custom colors
+;	This decreases CPU time (especially on bouncer playback) for each line displayed
+; 	Custom colors persist between sessions (stored as rcolorscustom in your AdiIRC folder)
+;
+; *Buffer playback from bouncers is now properly supported without mangling output
+;
+; **NOTE: The built-in "Use Random Nick Colors" (Options -> Nick Colors) must be disabled for this script to work 
+; **NOTE: Any nick colors set in the AdiIRC options menu override random or custom colors set by this script
+;
+; Thanks to pereba for the original inspiration script and kr0n for troubleshooting help, as well as 
+; introducing me to hashtables :)
+;
+; For any of the output strings, if you don't want to show usermodes, you can replace $nick($chan, $nick).pnick
+;  with just plain $nick
+;
+; If you're curious, $chr(61442) is a special AdiIRC character that interprets the following string as a hex 
+; color code and allows for colorizing text
+;
+; If the script is acting weird for you, consider updating to the latest release or beta of AdiIRC; 
+; some of this code relies on features or bufixes in later versions
+;
+; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; This is the initialization section, it handles actions to take when the script is loaded for 
+; the first time or reloaded, 
+;
+;
+; whenever the script is loaded for the first time or reloaded, call /savereload, 
+; which saves the rcolors and rcolorscustom hashtables to disk, clears them from memory, 
+; then reloads them--this also handles reloading them from disk when AdiIRC first starts
+;
+on *:LOAD:savereload
+on *:START:savereload
+;
+; save & overwrite the rcolors & rcolorscustom hashtables to disk on exit
+;
+on *:Exit:{
+hsave -o rcolors rcolors
+hsave -o rcolorscustom rcolorscustom
+}
+; dump all cached colors when the options screen is loaded; this ensures no stale colors are used
+; if the background color is changed, since they might not be easy enough to see
+on *:OPTIONS:{
+reset
+savereload
+}
+;
+; This section responds to normal in-channel text events
+;
+on ^*:TEXT:*:#:{
+;
+; Check if message is ZNC buffer playback and use values accordingly
+; ZNC buffer playback has different message content than a normal message and needs different handling
+;
+  var %time $asctime($iif($msgstamp, $v1, $ctime), $timestampfmt)
+  var %pnick $iif($nick($chan, $nick).pnick, $v1, $nick)
+; build the echo string
+  echo -vrlmbf # %time $replace($replace($prefixuser, $chr(32), $chr(160)), $ $+ pnick, $+($chr(61442), $getcolor, %pnick, $chr(3)))  $1-
+  halt
+}
+;
+; This section handles ACTIONs, like /me or /emote commands
+; Mostly the same as PRIVMSG but with the output string adjusted to properly display these types of messages
+;
+on ^*:ACTION:*:#:{
+  var %time $asctime($iif($msgstamp, $v1, $ctime), $timestampfmt)
+  var %pnick $iif($nick($chan, $nick).pnick, $v1, $nick)
+;build the echo string  
+  echo $color(action) -vrlmbf # %time $replace($replace($prefixemote, $chr(32), $chr(160)), $ $+ pnick, $+($chr(61442), $getcolor, %pnick, $chr(3)))  $1-  
+  halt 
+}
+
+alias -l getcolor {
+; Initialize %color as neutral grey in case we end up with nothing else to return
+  var %color = 888888
+; Check if nick has a custom color set in AdiIRC options; if it does, return that color
+  if ($nick(#, $nick).color > 1) {
+    var %color = $getHexOfColor($nick(#, $nick).color))
+    return %color
+}
+; Check if nick has a script-custom color; if it does, return that color
+  else if ($hget(rcolorscustom, $nick)) {
+    var %color = $hget(rcolorscustom, $nick)
+    return %color
+    }
+; Check if nick has a cached color, if it does, return that color
+  else if ($hget(rcolors, $nick)) {
+    var %color = $hget(rcolors, $nick)
+    return %color
+  }
+; If no cached or custom colors are found, roll for a new color and add it to the cache
+  else {
+    var %color $iif(%rcolors_bg == 1, $getDarkColor, $getBrightColor)
+    hadd -m rcolors $nick %color
+    return %color
+  }
+; If something fails, return %color as originally set to 888888
+  return %color
+}
+
+
+;
+;
+;
+; This is the alias for generating bright colors
+;
+alias -l getBrightColor {
+;
+; Generate a unique seed number by calculating the MD5 hash of a nick, interpreting the last 8 characters as a hex number, then converting that to decimal
+;
+  var  %nickSeedNum = $base($right($md5($nick),8),16,10)
+;
+; Multiply by a high prime number, then take the modulus of a prime number < 255 to get 3 values for R,G,B color; this induces a bit more variety in the colors, and
+; for whatever reason (I'm not a mathematician) tends to "favor" returning numbers close to 255 (brighter colors)
+;
+  var %dec1 = $calc((%nickSeedNum * 7793) % 251)
+  var %dec2 = $calc((%nickSeedNum * 5153)  % 241)
+  var %dec3 = $calc((%nickSeedNum * 3623) % 239)
+;
+; Take the average of the RGB values 
+;
+  var %decaverage = $calc((%dec1 + %dec2 + %dec3)/3)
+;
+; Generate colors until you get one that is "bright" (average RGB value > 128)
+; If you find these colors are too dark or bright, you can adjust the %decaverage <= 128
+;
+  while (%decaverage <= 128) {
+    var %dec1 = $calc((%dec1 * 7793) % 251)
+    var %dec2 = $calc((%dec2 * 5153) % 241)
+    var %dec3 = $calc((%dec3 * 3623) % 239)
+    var %decaverage = $calc((%dec1 + %dec2 + %dec3)/3)
+  }
+;
+; call $RGBToHex to turn the RGB Value into a hex color code and return that code
+;
+  var %brightColorReturn = $RGBToHex(%dec1,%dec2,%dec3)
+  return %brightColorReturn
+}
+;
+; This is the alias for generating dark colors
+; It's the same as $getBrightColor but looks for colors that are "dark", or have
+; average RGB value < 128 - Again you can tweak the %decaverage <= 128 if they're too dark or bright
+;
+alias -l getDarkColor {
+  var  %nickSeedNum = $base($right($md5($nick),8),16,10)
+  var %dec1 = $calc((%nickSeedNum * 7793) % 113)
+  var %dec2 = $calc((%nickSeedNum * 5153) % 127)
+  var %dec3 = $calc((%nickSeedNum * 3623) % 131)
+  var %decaverage = $calc((%dec1 + %dec2 + %dec3)/3)
+
+  while (%decaverage >= 128) {
+    var %dec1 = $calc((%dec1 * 7793) % 113)
+    var %dec2 = $calc((%dec2 * 5153) % 127)
+    var %dec3 = $calc((%dec3 * 3623) % 131)
+    var %decaverage = $calc((%dec1 + %dec2 + %dec3)/3)
+  }
+  var %darkColorReturn = $RGBToHex(%dec1,%dec2,%dec3)
+  return %darkColorReturn
+}
+;
+; This is the alias for converting RGB values to Hex, used here for getting hex strings to put 
+; after $chr(61442) - see top if you're not sure what this character is
+;
+; it takes in 3 numbers from 0-255, converts them to hex numbers, 
+; then returns them as a single string, EG $RGBToHex(255,255,255) or "White" returns FFFFFF
+;
+alias -l RGBToHex {
+  var %RtoHex = $base($1,10,16,2)
+  var %GtoHex = $base($2,10,16,2)
+  var %BtoHex = $base($3,10,16,2)
+  var %HexCodeReturn = %RToHex $+ %GToHex $+ %BToHex
+  return %HexCodeReturn
+}
+;
+; This is the alias for determining if your background is bright
+;
+; Average RGB of 100 seems to work well for determining if background is light or dark,
+; but if you find the script is using colors that aren't showing well you might want to 
+; adjust this
+;
+alias -l isBackgroundBright {
+;
+; get the backgound color
+;
+  var %bgRGB = $rgb($color(34))
+;
+; strip out the commas and replace them with the + sign
+;
+  var %bgRGB = $replace(%bgRGB,$chr(44),$chr(43))
+;
+; evaluate the string from above
+;
+  var %bgRGBAverage = $calc((%bgRGB)/3)
+;
+; check if the average RGB value of the background is > 100; 
+; return 1 if it is (bright) or 0 if it isn't (dark)
+;
+  if (%bgRGBAverage >= 100) { 
+    return 1
+  }
+  else return 0
+}
+
+;
+; This is the alias that gets the hex value of numbered config colors 
+; https://dev.adiirc.com/projects/adiirc/wiki/Extra_Colors
+;
+; It is used in this script only to keep nicks with custom colors set using 
+; those colors instead of picking random colors
+;
+alias -l getHexOfColor {
+;
+; get the specified color's R,G,B value
+  var %colorToGet = $rgb($color($1))
+;
+; tokenize the string returned above with commas ($chr(44)) as delimiter; pass those values into the $RGBToHex alias and return the value
+  tokenize 44 %colorToGet
+  return $RGBToHex($1,$2,$3)
+}
+;
+; This is the alias for setting custom nick colors, it takes a Nick and a hex color code as arguments
+; EXAMPLE /setCustomColor JohnDoe f854a7
+;
+alias setCustomColor {
+; typing just /setcustomcolor returns rudimentary help
+; otherwise write the nick+color to hash table rcolorscustom and save to disk
+   $iif($1, /echo -at $+($chr(61442),$2) Set this color for nick $1, /echo -at Usage: /setCustomColor <Nick> <Hex Color Code> Example: /setCustomColor JohnDoe F854A7)
+   
+   hadd -m rcolorscustom $1 $2
+   hsave -o rcolorscustom rcolorscustom
+}
+;
+; This is the alias for deleting custom nick colors, it takes only a nick as an argument
+; EXAMPLE /delCustomColor JohnDoe
+alias delCustomColor {
+; typing just /delcustomcolor returns rudimentary help
+; otherwise remove nick+color from hash table rcolorscustom and save to disk
+   $iif($1, echo -at Trying to remove custom color for $1, /echo -at Usage: /delCustomColor  <Nick> Example: /delCustomColor JohnDoe)
+   hdel rcolorscustom $1
+   hsave -o rcolorscustom rcolorscustom
+}
+;
+; This is the alias for clearing all cached random colors
+; It empties the rcolors hashtable, then saves the empty table back to the disk
+; It is generally used in this script for ensuring that colors adjust accordingly to background color changes
+;
+alias -l reset {
+; Remove all cached colors
+  if ($hget(rcolors)) {
+    .hdel -w rcolors *
+	savereload
+  }  
+; Check if background is light or dark and set %rcolors_bg accordingly
+  set %rcolors_bg $isBackgroundBright
+}
+;
+; This is the alias for saving & reloading cached & custom colors to disk. It is primarily used on first run, or when
+; settings are changed and need to be stored
+; 
+
+alias savereload {
+; check if the rcolors hashtable exists, if it does, save it to disk, purge all entries from memory and reload it.
+; it also checks if the hashtable is too large (more than 500 entries) and purges it if that's the case
+; if the hashtable is purged, colors will be recalculated and entered the next time a person speaks
+	if ($hget(rcolors)) {
+		if ($hget(rcolors,0).item > 500) {
+			.hdel -w rcolors *
+		}
+		hsave -o rcolors rcolors
+		.hdel -w rcolors *
+		hload rcolors rcolors
+	}
+    else { 
+		hmake rcolors 100
+		hload rcolors rcolors
+	}
+; same as above, but with rcolorscustom
+; rcolorscustom will also never be auto-cleared  
+   if ($hget(rcolorscustom)) {
+	hsave -o rcolorscustom rcolorscustom
+	.hdel -w rcolorscustom *
+	hload rcolorscustom rcolorscustom
+	}
+            else { 
+            hmake rcolorscustom 100
+            hload rcolorscustom rcolorscustom
+            }
+                      
+}
